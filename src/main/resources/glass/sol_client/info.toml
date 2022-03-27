@@ -1,0 +1,7 @@
+id = "sol_client"
+version = "1.0"
+namespace = "me.mcblueparrot.client"
+
+[listeners]
+mixin = "tweak.SolMixinListener"
+initialize = "tweak.transformer.ClassTransformer"

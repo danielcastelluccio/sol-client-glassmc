@@ -1,0 +1,627 @@
+import com.github.glassmc.kiln.standard.environment.GlassLoaderEnvironment
+import com.github.glassmc.kiln.standard.CustomTransformer
+import org.objectweb.asm.Type
+import org.objectweb.asm.tree.AbstractInsnNode
+import org.objectweb.asm.tree.AnnotationNode
+import org.objectweb.asm.tree.ClassNode
+import org.objectweb.asm.tree.FieldInsnNode
+import org.objectweb.asm.tree.FieldNode
+import org.objectweb.asm.tree.MethodInsnNode
+import org.objectweb.asm.tree.MethodNode
+
+buildscript {
+	repositories {
+		mavenCentral()
+
+		maven {
+			url = 'https://jitpack.io/'
+		}
+		maven {
+			url = 'https://glassmc.ml/repository/'
+		}
+	}
+	dependencies {
+		classpath 'com.github.glassmc:kiln:0.8.0'
+	}
+}
+
+plugins {
+	id 'com.github.johnrengelman.shadow' version '7.1.2'
+}
+
+apply plugin: 'kiln-main'
+
+kiln {
+	environment = new GlassLoaderEnvironment("0.9.7")
+	transformers += new MixinRemapper()
+}
+
+repositories {
+	mavenCentral()
+
+	maven {
+		url "https://libraries.minecraft.net"
+	}
+	maven {
+		url "https://repo.spongepowered.org/maven"
+	}
+	maven {
+		url "https://repo.codemc.io/repository/maven-public"
+	}
+	maven {
+		url "https://repo.hypixel.net/repository/Hypixel"
+	}
+	maven {
+        url "https://jitpack.io"
+	}
+	maven {
+		url = 'https://glassmc.ml/repository/'
+	}
+}
+
+configurations {
+	shadowImplementation
+	implementation.extendsFrom(shadowImplementation)
+}
+
+dependencies {
+	implementation "com.github.glassmc:loader:0.9.6"
+	compileOnly "org.projectlombok:lombok:1.18.22"
+	annotationProcessor 'org.projectlombok:lombok:1.18.22'
+	//annotationProcessor "org.spongepowered:mixin:0.7.11-SNAPSHOT"
+	//dependency("org.spongepowered:mixin:0.7.11-SNAPSHOT") {
+	//	exclude module: "launchwrapper"
+	//	exclude module: "guava"
+	//	exclude module: "gson"
+	//	exclude module: "commons-io"
+	//}
+	shadowImplementation "org.slick2d:slick2d-core:1.0.2"
+	shadowImplementation "com.logisticscraft:occlusionculling:0.0.5-SNAPSHOT"
+	shadowImplementation "net.hypixel:hypixel-api-core:4.0"
+	
+	//if(workspaceReady) {
+	//	dependency files(replayModRuntimeJar)
+	//	ship files(replayModShippedJar)
+	//}
+
+	shadowImplementation "com.github.JnCrMx:discord-game-sdk4j:v0.5.4"
+
+	compileOnly "net.minecraft:client-1.8.9:mcp"
+
+	implementation 'com.github.glassmc:mixin:9bdcf18ab7:mapped'
+}
+
+shadowJar {
+	configurations = [project.configurations.shadowImplementation]
+}
+
+class MixinRemapper extends CustomTransformer {
+
+	private final Map<String, String> mixinClasses = new HashMap<>()
+	private Map<String, ClassNode> classNodes
+
+	@Override
+	void map(List<ClassNode> context, Map<String, ClassNode> classNodes) {
+		if (classNodes.isEmpty()) {
+			return
+		}
+
+		this.classNodes = classNodes
+
+		for (ClassNode classNode : context) {
+			for (AnnotationNode annotationNode : classNode.invisibleAnnotations) {
+				if (annotationNode.desc = "Lorg/spongepowered/asm/mixin/Mixin;") {
+					if (annotationNode.values != null) {
+						List<Type> values = annotationNode.values.get(annotationNode.values.indexOf("value") + 1) as List<Type>
+						if (values.get(0) instanceof Type) {
+							mixinClasses.put(classNode.name, values.get(0).className.replace(".", "/"))
+						}
+					}
+				}
+			}
+		}
+
+		for(String className : classNodes.keySet()) {
+			ClassNode classNode = classNodes.get(className)
+
+			for (AnnotationNode annotationNode : classNode.invisibleAnnotations) {
+				if (annotationNode.desc = "Lorg/spongepowered/asm/mixin/Mixin;") {
+					if (annotationNode.values != null) {
+						List<Type> values = annotationNode.values.get(annotationNode.values.indexOf("value") + 1) as List<Type>
+						if (values.get(0) instanceof Type) {
+							List<Type> oldValues = new ArrayList<>(values)
+							values.clear()
+
+							for (Type type : oldValues) {
+								values.add(Type.getType("L" + this.getRemapper().map(type.getClassName().replace(".", "/")) + ";"))
+							}
+						}
+					}
+				}
+			}
+
+			for(FieldNode fieldNode : classNode.fields) {
+				if(this.getMixinClass(className) != null) {
+					for(AnnotationNode annotationNode : fieldNode.visibleAnnotations) {
+						if(annotationNode.desc == "Lorg/spongepowered/asm/mixin/Shadow;") {
+							fieldNode.name = this.mapFieldName(className, fieldNode.name, fieldNode.desc)
+						}
+					}
+				}
+			}
+
+			for(MethodNode methodNode : classNode.methods) {
+
+				if(this.getMixinClass(className) != null) {
+					for(AnnotationNode annotationNode : methodNode.visibleAnnotations) {
+						if(annotationNode.desc == "Lorg/spongepowered/asm/mixin/gen/Invoker;" ||
+								annotationNode.desc == "Lorg/spongepowered/asm/mixin/gen/Accessor;" ||
+								annotationNode.desc == "Lorg/spongepowered/asm/mixin/Overwrite;" ||
+								annotationNode.desc == "Lorg/spongepowered/asm/mixin/Shadow;") {
+							methodNode.name = this.mapMethodName(className, methodNode.name, methodNode.desc)
+						}
+					}
+
+					for(AnnotationNode annotationNode : methodNode.visibleAnnotations) {
+						if (annotationNode.desc == "Lorg/spongepowered/asm/mixin/gen/Accessor;") {
+							if (annotationNode.values != null) {
+								int index = annotationNode.values.indexOf("value")
+								String string = annotationNode.values.get(index + 1) as String
+
+								string = this.mapFieldName(className, string, "")
+
+								annotationNode.values.set(index + 1, string)
+							}
+						} else if (annotationNode.desc == "Lorg/spongepowered/asm/mixin/gen/Invoker;") {
+							if (annotationNode.values != null) {
+								int index = annotationNode.values.indexOf("value")
+								String string = (annotationNode.values.get(index + 1) as String)
+								int descIndex = string.indexOf("(")
+								String name = string.substring(0, descIndex)
+								String descriptor = string.substring(descIndex)
+
+								string = this.mapMethodName(className, name, descriptor) + this.getRemapper().mapDesc(descriptor)
+
+								annotationNode.values.set(index + 1, string)
+							}
+						}
+					}
+
+					for(AnnotationNode annotationNode : methodNode.visibleAnnotations) {
+						if(annotationNode.desc == "Lorg/spongepowered/asm/mixin/injection/Inject;" ||
+								annotationNode.desc == "Lorg/spongepowered/asm/mixin/injection/Redirect;" ||
+								annotationNode.desc == "Lorg/spongepowered/asm/mixin/injection/ModifyConstant;") {
+							List<String> targets = annotationNode.values.get(annotationNode.values.indexOf("method") + 1) as List<String>
+							List<String> newTargets = new ArrayList<>()
+							for(String string : targets) {
+								int splitIndex = string.indexOf('(')
+								String name = string.substring(0, splitIndex)
+								String desc = string.substring(splitIndex)
+								newTargets.add(this.getRemapper().mapMethodName(this.getMixinClass(className), name, desc) + this.getRemapper().mapMethodDesc(desc))
+							}
+							int index = annotationNode.values.indexOf(targets)
+							annotationNode.values.remove(targets)
+							annotationNode.values.add(index, newTargets)
+						}
+
+						if(annotationNode.values != null && annotationNode.values.contains("at")) {
+							AnnotationNode atAnnotation = annotationNode.values.get(annotationNode.values.indexOf("at") + 1) as AnnotationNode
+
+							if (atAnnotation.values.get(0) instanceof AnnotationNode) {
+								atAnnotation = atAnnotation.values.get(0) as AnnotationNode
+							}
+
+							if(atAnnotation.values.contains("target")) {
+								String target = atAnnotation.values.get(atAnnotation.values.indexOf("target") + 1)
+
+								int index = target.indexOf(";")
+								String[] classMethodSplit = [target.substring(0, index), target.substring(index + 1)]
+								String className1 = classMethodSplit[0].substring(1)
+								int methodDescIndex = classMethodSplit[1].indexOf('(')
+								if (methodDescIndex != -1) {
+									String methodName = classMethodSplit[1].substring(0, methodDescIndex)
+									String methodDesc = classMethodSplit[1].substring(methodDescIndex)
+
+									int targetIndex = atAnnotation.values.indexOf(target)
+
+									atAnnotation.values.remove(target)
+
+									atAnnotation.values.add(targetIndex, "L" + this.getRemapper().map(className1) + ";" + this.getRemapper().mapMethodName(className1, methodName, methodDesc) + this.getRemapper().mapMethodDesc(methodDesc))
+								} else {
+									if (classMethodSplit[1].contains(":")) {
+										String[] fieldSplit = classMethodSplit[1].split(":")
+
+										String fieldName = fieldSplit[0]
+										int targetIndex = atAnnotation.values.indexOf(target)
+
+										atAnnotation.values.remove(target)
+
+										atAnnotation.values.add(targetIndex, "L" + this.getRemapper().map(className1) + ";" + this.getRemapper().mapFieldName(className1, fieldName, "") + ":" + this.getRemapper().mapDesc(fieldSplit[1]))
+									} else {
+										String fieldName = classMethodSplit[1]
+										int targetIndex = atAnnotation.values.indexOf(target)
+
+										atAnnotation.values.remove(target)
+
+										atAnnotation.values.add(targetIndex, "L" + this.getRemapper().map(className1) + ";" + this.getRemapper().mapFieldName(className1, fieldName, ""))
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		for (String className : classNodes.keySet()) {
+			for (MethodNode methodNode : classNodes.get(className).methods) {
+				for(AbstractInsnNode node : methodNode.instructions.toArray()) {
+					if(node instanceof FieldInsnNode) {
+						if(this.getMixinClass(node.owner) != null) {
+							node.name = this.mapFieldName(node.owner, node.name, node.desc)
+						}
+					}
+					if(node instanceof MethodInsnNode) {
+						if(this.getMixinClass(node.owner) != null) {
+							node.name = this.mapMethodName(node.owner, node.name, node.desc)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	private String mapMethodName(String className, String methodName, String methodDesc) {
+		String mixinClass = this.getMixinClass(className)
+
+		String methodName2 = methodName
+
+		if(methodName.startsWith("invoke") || methodName.startsWith("call")) {
+			String prefix = methodName.startsWith("invoke") ? "invoke" : "call"
+			String strippedName = methodName.replace(prefix, "")
+			strippedName = strippedName.charAt(0).toLowerCase().toString() + strippedName.substring(1)
+			methodName2 = this.getRemapper().mapMethodName(mixinClass, strippedName, methodDesc)
+			methodName2 = prefix + methodName2.charAt(0).toUpperCase().toString() + methodName2.substring(1)
+		} else if(methodName.startsWith("get") || methodName.startsWith("set") || methodName.startsWith("is")) {
+			String prefix = methodName.startsWith("get") ? "get" : methodName.startsWith("set") ? "set" : "is"
+			String strippedName = methodName.replace(prefix, "")
+			strippedName = strippedName.charAt(0).toLowerCase().toString() + strippedName.substring(1)
+			methodName2 = this.getRemapper().mapFieldName(mixinClass, strippedName, methodDesc)
+			methodName2 = prefix + methodName2.charAt(0).toUpperCase().toString() + methodName2.substring(1)
+		}
+
+		String methodName3 = this.getRemapper().mapMethodName(mixinClass, methodName, methodDesc)
+
+		if (methodName3 != methodName) {
+			return methodName3
+		} else if (methodName2 != methodName) {
+			return methodName2
+		}
+
+		return methodName
+	}
+
+	private String mapFieldName(String className, String fieldName, String fieldDesc) {
+		String mixinClass = this.getMixinClass(className)
+		return this.getRemapper().mapFieldName(mixinClass, fieldName, fieldDesc)
+	}
+
+	private String getMixinClass(String className) {
+		return mixinClasses.get(className)
+	}
+
+}
+
+//sourceCompatibility = JavaVersion.VERSION_1_8
+//targetCompatibility = JavaVersion.VERSION_1_8
+
+//def launchWrapperTweakClass = "me.mcblueparrot.client.tweak.Tweaker"
+
+/*minecraft {
+	version = "1.8.9"
+	tweakClass = launchWrapperTweakClass
+	mappings = "stable_22"
+	runDir = "run"
+
+	makeObfSourceJar = false
+}*/
+
+/*def mcpFolder = new File(System.getProperty("user.home"),
+		".gradle/caches/minecraft/de/oceanlabs/mcp/mcp_stable/22")
+
+static def csvToMap(file) {
+	Map<String, String> methods = new HashMap<>()
+	for(def line : Files.readAllLines(file.toPath())) {
+		methods.put(line.split(",")[0], line.split(",")[1])
+	}
+	return methods
+}
+
+static def process(File inputFile, File outputFile, Map<String, String> methods, Map<String, String> fields,
+				   File fixSrg) {
+	def zip = new ZipFile(inputFile)
+	def fileOutput = new FileOutputStream(outputFile)
+	def output = new ZipOutputStream(fileOutput)
+
+	Set<String> fixBuilder = new HashSet<>()
+
+	SeargeSniffer sniffer = new SeargeSniffer(fixBuilder, methods, fields)
+
+	addReplayModRemapper(fixBuilder)
+
+	for(ZipEntry entry : Collections.list(zip.entries())) {
+		InputStream entryInput = zip.getInputStream(entry)
+
+		if(entry.getName() == "mixins.core.replaymod.json"
+				|| entry.getName() == "mixins.recording.replaymod.json"
+				|| entry.getName() == "mixins.compat.mapwriter.replaymod.json"
+				|| entry.getName() == "assets/replaymod/logo_button.png"
+				|| entry.getName() == "assets/replaymod/logo.jpg"
+				|| entry.getName().startsWith("assets/replaymod/lang/")
+				|| entry.getName() == "default_thumb.jpg"
+				|| entry.getName().startsWith("org/spongepowered/")
+				|| entry.getName() == "com/replaymod/core/ReplayModBackend.class"
+				|| entry.getName() == "com/replaymod/core/SettingsRegistry.class"
+				|| entry.getName() == "com/replaymod/core/SettingsRegistry\$SettingKey.class"
+				|| entry.getName() == "com/replaymod/core/SettingsRegistryBackend.class"
+				|| entry.getName() == "com/replaymod/core/versions/scheduler/SchedulerImpl.class"
+				|| entry.getName() == "com/replaymod/lib/de/johni0702/minecraft/gui/utils/EventRegistrations.class"
+				|| entry.getName() == "com/replaymod/recording/ReplayModRecording.class"
+				|| entry.getName() == "com/replaymod/compat/ReplayModCompat.class"
+				|| entry.getName() == "com/replaymod/core/utils/ModInfoGetter.class"
+				|| (methods != null && entry.getName() == "mixins.replaymod.refmap.json")) {
+			entryInput.close()
+			continue
+		}
+
+		if(entry.isDirectory()) continue
+
+		byte[] content = IOUtils.toByteArray(entryInput)
+
+		if(entry.getName().endsWith(".class") && methods != null && fields != null) {
+			def reader = new ClassReader(content)
+			reader.accept(new RemappingClassAdapter(new ClassNode(), sniffer), ClassReader.EXPAND_FRAMES)
+		}
+
+		entryInput.close()
+
+		output.putNextEntry(new ZipEntry(entry.getName()))
+		output.write(content)
+		output.closeEntry()
+	}
+
+	output.close()
+	fileOutput.close()
+	zip.close()
+
+	FileUtils.writeStringToFile(fixSrg, String.join("\n", fixBuilder), "utf-8")
+}
+
+static def addReplayModRemapper(def fixBuilder) {
+	fixBuilder.add("CL: com/replaymod/core/ReplayModBackend me/mcblueparrot/client/mod/impl/replay/fix/SCReplayModBackend")
+	fixBuilder.add("CL: com/replaymod/core/SettingsRegistry " +
+			"me/mcblueparrot/client/mod/impl/replay/fix/SCSettingsRegistry")
+	fixBuilder.add("CL: com/replaymod/core/versions/scheduler/SchedulerImpl " +
+			"me/mcblueparrot/client/mod/impl/replay/fix/SCScheduler")
+	fixBuilder.add("CL: com/replaymod/core/utils/ModInfoGetter " +
+			"me/mcblueparrot/client/mod/impl/replay/fix/SCModInfoGetter")
+	fixBuilder.add("CL: com/replaymod/lib/de/johni0702/minecraft/gui/utils/EventRegistrations " +
+			"me/mcblueparrot/client/mod/impl/replay/fix/SCEventRegistrations")
+	fixBuilder.add("CL: com/replaymod/recording/ReplayModRecording " +
+			"me/mcblueparrot/client/mod/impl/replay/fix/SCReplayModRecording")
+	fixBuilder.add("CL: com/replaymod/compat/ReplayModCompat " +
+			"me/mcblueparrot/client/mod/impl/replay/fix/SCReplayModCompat")
+	fixBuilder.add("CL: net/minecraftforge/client/event/GuiScreenEvent\$ActionPerformedEvent\$Pre " +
+			"me/mcblueparrot/client/event/impl/ActionPerformedEvent")
+	fixBuilder.add("CL: net/minecraftforge/fml/client/registry/ClientRegistry " +
+			"me/mcblueparrot/client/mod/impl/replay/fix/SCClientRegistry")
+	fixBuilder.add("CL: net/minecraftforge/fml/common/eventhandler/SubscribeEvent " +
+			"me/mcblueparrot/client/event/EventHandler")
+	fixBuilder.add("CL: net/minecraftforge/fml/common/gameevent/PlayerEvent\$ItemPickupEvent " +
+			"me/mcblueparrot/client/event/impl/ItemPickupEvent")
+	fixBuilder.add("CL: net/minecraftforge/event/entity/player/PlayerSleepInBedEvent " +
+			"me/mcblueparrot/client/event/impl/PlayerSleepEvent")
+	fixBuilder.add("CL: net/minecraftforge/client/event/EntityViewRenderEvent\$CameraSetup " +
+			"me/mcblueparrot/client/event/impl/CameraRotateEvent")
+	fixBuilder.add("CL: net/minecraftforge/client/event/RenderGameOverlayEvent\$ElementType " +
+			"me/mcblueparrot/client/event/impl/GameOverlayElement")
+	fixBuilder.add("CL: net/minecraftforge/client/event/RenderGameOverlayEvent\$Pre " +
+			"me/mcblueparrot/client/event/impl/PreGameOverlayRenderEvent")
+	fixBuilder.add("CL: net/minecraftforge/client/event/RenderGameOverlayEvent\$Post " +
+			"me/mcblueparrot/client/event/impl/PostGameOverlayRenderEvent")
+	fixBuilder.add("CL: net/minecraftforge/fml/common/gameevent/TickEvent\$RenderTickEvent " +
+			"me/mcblueparrot/client/event/impl/RenderTickEvent")
+	fixBuilder.add("CL: net/minecraftforge/fml/common/network/internal/FMLProxyPacket " +
+			"me/mcblueparrot/client/util/Stub")
+	fixBuilder.add("CL: net/minecraftforge/client/event/GuiScreenEvent\$MouseInputEvent\$Pre " +
+			"me/mcblueparrot/client/event/impl/PreGuiMouseInputEvent")
+	fixBuilder.add("CL: net/minecraftforge/client/event/GuiScreenEvent\$KeyboardInputEvent\$Pre " +
+			"me/mcblueparrot/client/event/impl/PreGuiKeyboardInputEvent")
+	fixBuilder.add("CL: net/minecraftforge/fml/common/FMLCommonHandler " +
+			"me/mcblueparrot/client/mod/impl/replay/fix/SCFMLCommonHandler")
+	fixBuilder.add("CL: net/minecraftforge/client/ForgeHooksClient " +
+			"me/mcblueparrot/client/mod/impl/replay/fix/SCForgeHooksClient")
+	fixBuilder.add("CL: com/replaymod/core/SettingsRegistry\$SettingKey " +
+			"me/mcblueparrot/client/mod/impl/replay/fix/SCSettingsRegistry\$SettingKey")
+}
+
+class SeargeSniffer extends Remapper {
+
+	Map<String, String> methods
+	Map<String, String> fields
+	Set<String> fixBuilder
+
+	SeargeSniffer(Set<String> fixBuilder, Map<String, String> methods, Map<String, String> fields) {
+		this.fixBuilder = fixBuilder
+		this.methods = methods
+		this.fields = fields
+	}
+
+	@Override
+	String mapMethodName(String owner, String name, String desc) {
+		if(methods.containsKey(name) && (owner.startsWith("com/replaymod") || owner.startsWith("net/minecraft"))) {
+			fixBuilder.add("MD: " + owner + "/" + name + " " + desc + " " + owner + "/" + methods.get(name) + " " +
+					desc)
+		}
+		return super.mapMethodName(owner, name, desc)
+	}
+
+	@Override
+	String mapFieldName(String owner, String name, String desc) {
+		if(fields.containsKey(name) && (owner.startsWith("com/replaymod") || owner.startsWith("net/minecraft"))) {
+			fixBuilder.add("FD: " + owner + "/" + name + " " + owner + "/" + fields.get(name))
+		}
+		return super.mapFieldName(owner, name, desc)
+	}
+
+}
+
+def workspaceReady = mcpFolder.exists()
+def replayModRuntimeJar
+def replayModShippedJar
+
+if(workspaceReady) {
+	def methodsFile = new File(mcpFolder, "methods.csv");
+	def fieldsFile = new File(mcpFolder, "fields.csv");
+
+	def srgFolder = new File(mcpFolder, "srgs")
+
+	def libsDir = new File(project.getRootDir(), "replaymod")
+
+	def replayModBase = "replaymod-1.8.9-2.6.3"
+
+	def replayModJar = new File(libsDir, replayModBase + ".jar")
+	if(!replayModJar.exists()) {
+		FileUtils.copyURLToFile(new URL("https://minio.replaymod.com/replaymod/" + replayModJar.getName()), replayModJar)
+	}
+
+	def seargeToMCP = new File(srgFolder, "srg-mcp.srg")
+
+	def replayModRuntimeJar0 = new File(libsDir, replayModBase + "-runtime0.jar")
+	if(!replayModRuntimeJar0.exists()) {
+		SpecialSource.main([
+				"--in-jar",
+				replayModJar,
+				"--out-jar",
+				replayModRuntimeJar0,
+				"--srg-in",
+				seargeToMCP
+		] as String[])
+	}
+
+	def replayModRuntimeJar1 = new File(libsDir, replayModBase + "-runtime1.jar")
+	def fixSrgRuntime = new File(libsDir, "replay-mod-fix-runtime.srg")
+	def fixSrgShipped = new File(libsDir, "replay-mod-fix-shipped.srg")
+
+	if(!replayModRuntimeJar1.exists()) {
+		Map<String, String> methods = csvToMap(methodsFile)
+		Map<String, String> fields = csvToMap(fieldsFile)
+		process(replayModRuntimeJar0, replayModRuntimeJar1, methods, fields, fixSrgRuntime)
+	}
+
+	replayModRuntimeJar = new File(libsDir, replayModBase + "-runtime.jar")
+
+	if(!replayModRuntimeJar.exists()) {
+		SpecialSource.main([
+				"--in-jar",
+				replayModRuntimeJar1,
+				"--out-jar",
+				replayModRuntimeJar,
+				"--srg-in",
+				fixSrgRuntime
+		] as String[])
+	}
+
+	def replayModShippedJar0 = new File(libsDir, replayModBase + "-shipped0.jar")
+
+	if(!replayModShippedJar0.exists()) {
+		process(replayModJar, replayModShippedJar0, null, null, fixSrgShipped)
+	}
+
+	replayModShippedJar = new File(libsDir, replayModBase + "-shipped.jar")
+
+	if(!replayModShippedJar.exists()) {
+		SpecialSource.main([
+				"--in-jar",
+				replayModShippedJar0,
+				"--out-jar",
+				replayModShippedJar,
+				"--srg-in",
+				fixSrgShipped
+		] as String[])
+	}
+}
+
+task cleanRefmap() {
+	doLast {
+		def tmpJar = new File(getTemporaryDir(), "tmp.jar")
+
+		def zip = new ZipFile(jar.archivePath)
+		def fileOutput = new FileOutputStream(tmpJar)
+		def output = new ZipOutputStream(fileOutput)
+
+		for(ZipEntry entry : Collections.list(zip.entries())) {
+			InputStream entryInput = zip.getInputStream(entry)
+
+			if(entry.getName() == "mixins.solclient.refmap.json") {
+				def obj = new JsonParser().parse(new InputStreamReader(entryInput)).getAsJsonObject()
+				obj.remove("data")
+
+				output.putNextEntry(new ZipEntry(entry.getName()))
+				output.write(obj.toString().getBytes())
+				output.close()
+				continue
+			}
+
+			if(entry.isDirectory()) continue
+
+			byte[] content = IOUtils.toByteArray(entryInput)
+
+			entryInput.close()
+
+			output.putNextEntry(new ZipEntry(entry.getName()))
+			output.write(content)
+			output.closeEntry()
+		}
+
+		output.close()
+		fileOutput.close()
+		zip.close()
+
+		jar.archivePath.delete()
+		tmpJar.renameTo(jar.archivePath)
+	}
+}
+
+jar.finalizedBy tasks.cleanRefmap*/
+
+/*mixin {
+	add sourceSets.main, "mixins.solclient.refmap.json"
+}
+
+runClient {
+	outputs.upToDateWhen {
+		false
+	}
+}
+
+jar {
+	dependsOn configurations.compile
+	manifest {
+		attributes(
+				"MixinConfigs": "mixins.solclient.json",
+				"TweakClass": launchWrapperTweakClass,
+				"TweakOrder": "0",
+				"Manifest-Version": "1.0"
+		)
+	}
+	from {
+		configurations.ship.collect {
+			it.isDirectory() ? it : zipTree(it)
+		}
+	}
+}
+
+tasks.withType(JavaCompile) {
+	options.encoding = "UTF-8"
+}*/
